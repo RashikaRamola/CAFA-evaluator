@@ -1,7 +1,8 @@
 import argparse
+import sys
+sys.path.append("/home/rashika/CAFA4/CAFA-evaluator/src/")
 from cafaeval.evaluation import cafa_eval, write_results
 import logging
-
 
 def command_line():
 
@@ -36,6 +37,9 @@ def command_line():
                              'Do not use multithread if you are short in memory')
     parser.add_argument('-log_level', type=str, choices=['debug', 'info', 'warning', 'error', 'critical'],
                         default='info', help='Log level')
+    # Add argument for bootstrapping
+    parser.add_argument('-b', '--B', type=int, default=10, help='The number of times boostrapping should be done to calculate the confidence intervals for the evaluated metric')
+
 
     args = parser.parse_args()
 
@@ -50,8 +54,10 @@ def command_line():
     # Run the evaluation
     df, dfs_best = cafa_eval(args.obo_file, args.pred_dir, args.gt_file,
                              ia=args.ia, no_orphans=args.no_orphans, norm=args.norm, prop=args.prop,
-                             max_terms=args.max_terms, th_step=args.th_step, n_cpu=args.threads)
+                             max_terms=args.max_terms, th_step=args.th_step, n_cpu=args.threads, B = args.B)
 
+    print(df)
+    print(df.columns)
     # Write the results
     write_results(df, dfs_best, out_dir=args.out_dir, th_step=args.th_step)
 

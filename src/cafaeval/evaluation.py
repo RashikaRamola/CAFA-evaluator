@@ -151,7 +151,7 @@ def evaluate_prediction(prediction, gt, ontologies, tau_arr, normalization='cafa
     return dfs
 
 
-def cafa_eval(obo_file, pred_dir, gt_file, ia=None, no_orphans=False, norm='cafa', prop='max', max_terms=None, th_step=0.01, n_cpu=1):
+def cafa_eval(obo_file, pred_dir, gt_file, ia=None, no_orphans=False, norm='cafa', prop='max', max_terms=None, th_step=0.01, n_cpu=1, B = 0):
 
     # Tau array, used to compute metrics at different score thresholds
     tau_arr = np.arange(th_step, 1, th_step)
@@ -181,6 +181,9 @@ def cafa_eval(obo_file, pred_dir, gt_file, ia=None, no_orphans=False, norm='cafa
             df_pred['filename'] = file_name.replace(pred_folder, '').replace('/', '_')
             dfs.append(df_pred)
             logging.info("Prediction: {}, evaluated".format(file_name))
+        
+        if B and prediction:
+            print(prediction['cellular_component'])
 
     # Concatenate all dataframes and save them
     df = None
@@ -205,6 +208,8 @@ def cafa_eval(obo_file, pred_dir, gt_file, ia=None, no_orphans=False, norm='cafa
     else:
         logging.info("No predictions evaluated")
 
+    print(dfs_best)
+    
     return df, dfs_best
 
 
@@ -222,3 +227,9 @@ def write_results(df, dfs_best, out_dir='results', th_step=0.01):
 
     for metric in dfs_best:
         dfs_best[metric].to_csv('{}/evaluation_best_{}.tsv'.format(out_folder, metric), float_format="%.{}f".format(decimals), sep="\t")
+        
+
+        
+#def bootstrap(df, B):
+        
+
