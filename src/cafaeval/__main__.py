@@ -1,7 +1,7 @@
 import argparse
 import sys
 sys.path.append("/home/rashika/CAFA4/CAFA-evaluator/src/")
-from cafaeval.evaluation import cafa_eval, write_results
+from evaluation import cafa_eval, write_results
 import logging
 
 def command_line():
@@ -54,7 +54,7 @@ def command_line():
     # Run the evaluation
     df, dfs_best = cafa_eval(args.obo_file, args.pred_dir, args.gt_file,
                              ia=args.ia, no_orphans=args.no_orphans, norm=args.norm, prop=args.prop,
-                             max_terms=args.max_terms, th_step=args.th_step, n_cpu=args.threads, B = args.B)
+                             max_terms=args.max_terms, th_step=args.th_step, n_cpu=args.threads)
 
     print(df)
     print(df.columns)
