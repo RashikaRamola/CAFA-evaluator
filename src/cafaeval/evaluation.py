@@ -5,6 +5,7 @@ import multiprocessing as mp
 import random
 from parser import obo_parser, gt_parser, pred_parser
 import logging
+import time
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 
@@ -90,7 +91,7 @@ def bootstrapping(tau_arr, gt, pred, toi, ns, ne, normalization, ic_arr=None, B 
         TP[tau] = np.logical_and(p[tau], g)  # TP
         FP[tau] = np.logical_and(p[tau], np.logical_not(g))  # FP, predicted but not in the ground truth
         FN[tau] = np.logical_and(np.logical_not(p[tau]), g)  # FN, not predicted but in the ground truth
-        TN[tau] = np.logical_and(np.logical_not(p[tau]), np.logical_not(g))
+        #TN[tau] = np.logical_and(np.logical_not(p[tau]), np.logical_not(g))
 
         # Weighted evaluation
         if ic_arr is not None:
@@ -98,33 +99,32 @@ def bootstrapping(tau_arr, gt, pred, toi, ns, ne, normalization, ic_arr=None, B 
             TP[tau] = TP[tau] * ic_arr[toi]  # TP
             FP[tau] = FP[tau] * ic_arr[toi]  # FP, predicted but not in the ground truth
             FN [tau] = FN[tau] * ic_arr[toi]  # FN, not predicted but in the ground truth
-            TN[tau] = TN[tau] * ic_arr[toi]
+            #TN[tau] = TN[tau] * ic_arr[toi]
 
     metrics_B = []
+
     for b in range(B):
         b_ind = random.choices(range(0, N), k=N)
         n_gt = g[b_ind].sum(axis=1)
         if ic_arr is not None:
             n_gt = (g[b_ind]* ic_arr[toi]).sum(axis=1)
-
         metrics = np.zeros((len(tau_arr), 6), dtype='float')
         for i, tau in enumerate(tau_arr):
-            print(tau)
-            TP_b = TP[tau][b_ind]
-            FP_b = FP[tau][b_ind]
-            FN_b = FN[tau][b_ind]
+            #TP_b = TP[tau][b_ind]
+            #FP_b = FP[tau][b_ind]
+            #FN_b = FN[tau][b_ind]
             #TN_b = TN[tau][b_ind]
 
             n_pred = p[tau][b_ind].sum(axis=1)  # TP + FP
-            n_intersection = TP_b.sum(axis=1)  # TP
+            n_intersection = TP[tau][b_ind].sum(axis=1)  # TP
 
             # Number of proteins with at least one term predicted with score >= tau
             metrics[i, 0] = (p[tau][b_ind].sum(axis=1) > 0).sum()
 
             # Sum of confusion matrices
             metrics[i, 1] = n_intersection.sum()  # TP
-            metrics[i, 2] = FP_b.sum(axis=1).sum()  # FP
-            metrics[i, 3] = FN_b.sum(axis=1).sum()  # FN
+            metrics[i, 2] = FP[tau][b_ind].sum(axis=1).sum()  # FP
+            metrics[i, 3] = FN[tau][b_ind].sum(axis=1).sum()  # FN
 
             # Macro-averaging
             metrics[i, 4] = np.divide(n_intersection.astype('float64'), n_pred, out=np.zeros_like(n_intersection, dtype='float'), where=n_pred > 0).sum()  # Precision
@@ -133,36 +133,19 @@ def bootstrapping(tau_arr, gt, pred, toi, ns, ne, normalization, ic_arr=None, B 
         metrics_df = pd.DataFrame(metrics, columns=["n", "tp", "fp", "fn", "pr", "rc"])
         metrics_df = normalize(metrics_df, ns, tau_arr, ne, normalization)
         metrics_B.append([metrics_df['f'].max(), metrics_df['f_micro'].max(), metrics_df['s'].min()])
-            # For Micro
-            # Number of proteins with at least one term predicted with score >= tau
-            #n_eval = (p[tau][b_ind].sum(axis=1) > 0).sum()
-            #n_pred_b = p[b_ind].sum(axis=1)  # TP + FP
-            #TP_b_total = TP_b.sum()
-            #FP_b_total = FP_b.sum()
-            #FN_b_total = FN_b.sum()
-
-            # Macro
-            #TP_protein = TP_b.sum(axis = 1) # Total TP at protein level
-            #n_gt_b = g[b_ind].sum(axis = 1)
-            #pr_M = np.divide(TP_protein, n_pred_b, out=np.zeros_like(n_pred_b, dtype='float'), where=n_pred_b > 0).sum()
-            #rc_M = np.divide(TP_protein, n_gt_b, out=np.zeros_like(n_gt_b, dtype='float'), where = n_gt_b > 0).sum()
-            #metrics.append([n_eval, TP_b_total, FP_b_total, FN_b_total, pr_M, rc_M])
-
-
-    print("RRR")
     metrics_B = pd.DataFrame(metrics_B, columns = ["f", "f_micro", "s"])
     # Calculate confidence intervals for each bootstapped column
     confidence_intervals = metrics_B.apply(lambda col: confidence_interval(col), axis=0)
     # confidence_intervals = confidence_intervals.to_dict(orient="records")
     row_names = ["lower_bound", "upper_bound", "median"]
-    metrics_dict = dict()
+    CI = pd.DataFrame()
     for row_name, (_, row) in zip(row_names, confidence_intervals.iterrows()):
         for k, v in row.to_dict().items():
-            key = row_name + '_' + k
-            metrics_dict[key] = [v]
-    metrics_df = pd.DataFrame(metrics_dict)
-
-    return metrics
+            col_name = k + '_' + row_name
+            CI[col_name] = [v]
+    CI["ns"] = ns
+    CI["B"] = B
+    return CI
 
 def confidence_interval(data, CI=0.95):
     lower_percentile = ((1.0 - CI) / 2.0) * 100
@@ -240,30 +223,50 @@ def evaluate_prediction(prediction, gt, ontologies, tau_arr, normalization='cafa
 
     dfs = []
     dfs_w = []
+    bs_dfs = []
+    bs_w_dfs = []
+    eval_start_time = time.time()
     for ns in prediction:
         ne = np.full(len(tau_arr), gt[ns].matrix[:, ontologies[ns].toi].shape[0])
         dfs.append(normalize(compute_metrics(prediction[ns], gt[ns], tau_arr, ontologies[ns].toi, None, n_cpu), ns, tau_arr, ne, normalization))
+        single_eval_time = time.time()
+        print("Single eval time = ", (single_eval_time - eval_start_time)/60)
         if B:
-            bootstrapping(tau_arr, gt[ns], prediction[ns], ontologies[ns].toi, ns, ne, normalization, ic_arr=None, B = B)
+            bs_dfs.append(bootstrapping(tau_arr, gt[ns], prediction[ns], ontologies[ns].toi, ns, ne, normalization, ic_arr=None, B = B))
+            bs_end_time = time.time()
+            print("B = ", B, " Bootstrap time = ", (bs_end_time - single_eval_time) / 60)
 
         if ontologies[ns].ia is not None:
             ne = np.full(len(tau_arr), gt[ns].matrix[:, ontologies[ns].toi_ia].shape[0])
             dfs_w.append(normalize(compute_metrics(prediction[ns], gt[ns], tau_arr, ontologies[ns].toi_ia, ontologies[ns].ia, n_cpu), ns, tau_arr, ne, normalization))
+            ia_eval_time = time.time()
             if B:
-                bootstrapping(tau_arr, gt[ns], prediction[ns], ontologies[ns].toi_ia, ns, ne, normalization, ontologies[ns].ia, B)
+                print("IA eval time = ", (ia_eval_time - bs_end_time) / 60)
+            else:
+                print("IA eval time = ", (ia_eval_time - single_eval_time) / 60)
+            if B:
+                bs_w_dfs.append(bootstrapping(tau_arr, gt[ns], prediction[ns], ontologies[ns].toi_ia, ns, ne, normalization, ontologies[ns].ia, B))
+                ia_bs_eval_time = time.time()
+                print("B = ", B, "IA Bootstrap time = ", (ia_bs_eval_time - ia_eval_time) / 60)
 
     dfs = pd.concat(dfs)
+    if bs_dfs:
+        bs_dfs = pd.concat(bs_dfs)
 
     # Merge weighted and unweighted dataframes
     if dfs_w:
         dfs_w = pd.concat(dfs_w)
         dfs = pd.merge(dfs, dfs_w, on=['ns', 'tau'], suffixes=('', '_w'))
+        if bs_w_dfs:
+            bs_w_dfs = pd.concat(bs_w_dfs)
+            bs_w_dfs = bs_w_dfs.rename(columns=lambda x: "w_" + x)
+            bs_dfs = pd.concat([bs_dfs, bs_w_dfs], axis = 1)
 
-    return dfs
+    return dfs, bs_dfs
 
 
-def cafa_eval(obo_file, pred_dir, gt_file, ia=None, no_orphans=False, norm='cafa', prop='max', max_terms=None, th_step=0.01, n_cpu=1, B = 10):
-
+def cafa_eval(obo_file, pred_dir, gt_file, ia=None, no_orphans=False, norm='cafa', prop='max', max_terms=None, th_step=0.01, n_cpu=1, B = 0):
+    start_time = time.time()
     # Tau array, used to compute metrics at different score thresholds
     tau_arr = np.arange(th_step, 1, th_step)
 
@@ -283,14 +286,21 @@ def cafa_eval(obo_file, pred_dir, gt_file, ia=None, no_orphans=False, norm='cafa
 
     # Parse prediction files and perform evaluation
     dfs = []
+    bs_dfs = []
     for file_name in pred_files:
         prediction = pred_parser(file_name, ontologies, gt, prop, max_terms)
         if not prediction:
             logging.warning("Prediction: {}, not evaluated".format(file_name))
         else:
-            df_pred = evaluate_prediction(prediction, gt, ontologies, tau_arr, normalization=norm, n_cpu=n_cpu, B = B)
+            start_eval_time = time.time()
+            df_pred, bs_df = evaluate_prediction(prediction, gt, ontologies, tau_arr, normalization=norm, n_cpu=n_cpu, B = B)
             df_pred['filename'] = file_name.replace(pred_folder, '').replace('/', '_')
             dfs.append(df_pred)
+            if B:
+                bs_df['filename'] = file_name.replace(pred_folder, '').replace('/', '_')
+                bs_dfs.append(bs_df)
+            end_eval_time = time.time()
+            print("Methods = ", file_name, "Total  Eval time = ", (end_eval_time - start_time)/60, "Parsing time = ", (start_eval_time - start_time)/60, "Only eval time = ", (end_eval_time - start_eval_time)/60,"for B = ", B)
             logging.info("Prediction: {}, evaluated".format(file_name))
 
 
@@ -316,11 +326,13 @@ def cafa_eval(obo_file, pred_dir, gt_file, ia=None, no_orphans=False, norm='cafa
                 dfs_best[metric] = df_best
     else:
         logging.info("No predictions evaluated")
-    
-    return df, dfs_best
+
+    if B:
+        bs_dfs = pd.concat(bs_dfs)
+    return df, dfs_best, bs_dfs
 
 
-def write_results(df, dfs_best, out_dir='results', th_step=0.01):
+def write_results(df, dfs_best, bs_df, out_dir='results', th_step=0.01):
 
     # Create output folder here in order to store the log file
     out_folder = os.path.normpath(out_dir) + "/"
@@ -331,6 +343,9 @@ def write_results(df, dfs_best, out_dir='results', th_step=0.01):
     decimals = int(np.ceil(-np.log10(th_step))) + 1
 
     df.to_csv('{}/evaluation_all.tsv'.format(out_folder), float_format="%.{}f".format(decimals), sep="\t")
+
+    if isinstance(bs_df, pd.DataFrame):
+        bs_df.to_csv('{}/CI.tsv'.format(out_folder), float_format="%.{}f".format(decimals), sep="\t")
 
     for metric in dfs_best:
         dfs_best[metric].to_csv('{}/evaluation_best_{}.tsv'.format(out_folder, metric), float_format="%.{}f".format(decimals), sep="\t")
