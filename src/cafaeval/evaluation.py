@@ -303,7 +303,6 @@ def cafa_eval(obo_file, pred_dir, gt_file, ia=None, no_orphans=False, norm='cafa
             print("Methods = ", file_name, "Total  Eval time = ", (end_eval_time - start_time)/60, "Parsing time = ", (start_eval_time - start_time)/60, "Only eval time = ", (end_eval_time - start_eval_time)/60,"for B = ", B)
             logging.info("Prediction: {}, evaluated".format(file_name))
 
-
     # Concatenate all dataframes and save them
     df = None
     dfs_best = {}

@@ -53,11 +53,10 @@ def command_line():
 
     # Run the evaluation
     df, dfs_best, bs_df = cafa_eval(args.obo_file, args.pred_dir, args.gt_file,
-                             ia=args.ia, no_orphans=args.no_orphans, norm=args.norm, prop=args.prop,
-                             max_terms=args.max_terms, th_step=args.th_step, n_cpu=args.threads, B= args.B)
+                             ia=args.ia, no_orphans=args.no_orphans, norm=args.norm, prop=args.prop, max_terms=args.max_terms, th_step=args.th_step, n_cpu=args.threads, B= args.B)
 
-    print(df)
-    print(df.columns)
+    #print(df)
+    #print(df.columns)
     # Write the results
     write_results(df, dfs_best, bs_df, out_dir=args.out_dir, th_step=args.th_step)
 
