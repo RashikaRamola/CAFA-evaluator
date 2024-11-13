@@ -2,7 +2,8 @@ import os
 import numpy as np
 import pandas as pd
 import multiprocessing as mp
-from cafaeval.parser import obo_parser, gt_parser, pred_parser
+import random
+from parser import obo_parser, gt_parser, pred_parser
 import logging
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
@@ -66,8 +67,75 @@ def compute_confusion_matrix(tau_arr, g, pred, toi, n_gt, ic_arr=None):
 
     return metrics
 
+def get_confusion_matrix(tau_arr, g, pred, toi, ic_arr=None, B_ind = None):
+    """
+    Perform the evaluation at the matrix level for all tau thresholds
+    """
+    # n, tp, fp, fn, pr, rc (fp = misinformation, fn = remaining uncertainty)
+    CM = {'tau' : [], 'p' : [], 'g' : g, 'TP' : [], 'FP' : [], 'FN' : []}
 
-def compute_metrics(pred, gt, tau_arr, toi, ic_arr=None, n_cpu=0):
+    for i, tau in enumerate(tau_arr):
+
+        CM['tau'].append(tau)
+        # Filter predictions based on tau threshold
+        p = solidify_prediction(pred.matrix[:, toi], tau)
+
+        # Terms subsets
+        TP = np.logical_and(p, g)  # TP
+        FP = np.logical_and(p, np.logical_not(g))  # misinformation, predicted but not in the ground truth
+        FN = np.logical_and(np.logical_not(p), g)  # remaining, not predicted but in the ground truth
+
+        # Weighted evaluation
+        if ic_arr is not None:
+            p = p * ic_arr[toi]
+            TP = TP * ic_arr[toi]  # TP
+            FP = FP * ic_arr[toi]  # FP, predicted but not in the ground truth
+            FN = FN * ic_arr[toi]  # FN, not predicted but in the ground truth
+
+        CM['p'].append(p)
+        CM['TP'].append(TP)
+        CM['FP'].append(FP)
+        CM['FN'].append(FN)
+
+    metrics = get_metrics_df(CM)
+    return metrics
+    #if B_ind:
+    #    metrics_B = bootstrap(CM, B_ind)
+    #return CM
+
+def get_metrics_df(CM):
+    metrics = np.zeros((len(CM['tau']), 6), dtype='float')
+    n_gt = CM['g'].sum(axis=1)
+    for i, tau in enumerate(CM['tau']):
+        n_pred = CM['p'][i].sum(axis=1)  # TP + FP
+        n_TP= CM['TP'][i].sum(axis=1)  # TP
+
+        # Number of proteins with at least one term predicted with score >= tau
+        metrics[i, 0] = (CM['p'][i].sum(axis=1) > 0).sum()
+
+        # Sum of confusion matrices
+        metrics[i, 1] = n_TP.sum()  # TP
+        metrics[i, 2] = CM['FP'][i].sum(axis=1).sum()  # FP
+        metrics[i, 3] = CM['FN'][i].sum(axis=1).sum()  # FN
+
+        # Macro-averaging
+        metrics[i, 4] = np.divide(n_TP, n_pred, out=np.zeros_like(n_TP, dtype='float'),
+                              where=n_pred > 0).sum()  # Precision
+        metrics[i, 5] = np.divide(n_TP, n_gt, out=np.zeros_like(n_gt, dtype='float'),
+                              where=n_gt > 0).sum()  # Recall
+    return metrics
+
+def bootstrap(CM, B_ind):
+    for i in range(len(B_ind)):
+        b_ind = B_ind[i]
+        TP_b = CM['TP'][b_ind]
+        FP_b = CM['FP'][b_ind]
+        FN_b = CM['FN'][b_ind]
+
+
+
+
+def compute_metrics(pred, gt, tau_arr, toi, ic_arr=None, n_cpu=0, B = 0, B_pct = 0):
     """
     Takes the prediction and the ground truth and for each threshold in tau_arr
     calculates the confusion matrix and returns the coverage,
@@ -80,16 +148,26 @@ def compute_metrics(pred, gt, tau_arr, toi, ic_arr=None, n_cpu=0):
 
     columns = ["n", "tp", "fp", "fn", "pr", "rc"]
     g = gt.matrix[:, toi]
+
+    # Generate B sets of indices
+    B_ind = []
+    N = len(gt.ids) # Number of proteins
+    if B and B_pct>0:
+        nB = round((B_pct / 100) * N) #Number of points to be included in each bootstrap round
+        for b in range(B):
+            B_ind.append(random.choices(range(0, N), k=nB))
+
     # Simple metrics
     if ic_arr is None:
         n_gt = g.sum(axis=1)
-        arg_lists = [[tau_arr, g, pred, toi, n_gt, None] for tau_arr in np.array_split(tau_arr, n_cpu)]
+        arg_lists = [[tau_arr, g, pred, toi, ic_arr = None, B_ind] for tau_arr in np.array_split(tau_arr, n_cpu)]
     # Weighted metrics
     else:
         n_gt = (g * ic_arr[toi]).sum(axis=1)
-        arg_lists = [[tau_arr, g, pred, toi, n_gt, ic_arr] for tau_arr in np.array_split(tau_arr, n_cpu)]
+        arg_lists = [[tau_arr, g, pred, toi, ic_arr, B_ind] for tau_arr in np.array_split(tau_arr, n_cpu)]
     with mp.Pool(processes=n_cpu) as pool:
-        metrics = np.concatenate(pool.starmap(compute_confusion_matrix, arg_lists), axis=0)
+        metrics = np.concatenate(pool.starmap(get_confusion_matrix, arg_lists), axis=0)
+        #metrics = np.concatenate(pool.starmap(compute_confusion_matrix, arg_lists), axis=0)
 
     return pd.DataFrame(metrics, columns=columns)
 
@@ -129,17 +207,17 @@ def normalize(metrics, ns, tau_arr, ne, normalization):
     return metrics
 
 
-def evaluate_prediction(prediction, gt, ontologies, tau_arr, normalization='cafa', n_cpu=0):
+def evaluate_prediction(prediction, gt, ontologies, tau_arr, normalization='cafa', n_cpu=0, B = 0, B_pct = 0):
 
     dfs = []
     dfs_w = []
     for ns in prediction:
         ne = np.full(len(tau_arr), gt[ns].matrix[:, ontologies[ns].toi].shape[0])
-        dfs.append(normalize(compute_metrics(prediction[ns], gt[ns], tau_arr, ontologies[ns].toi, None, n_cpu), ns, tau_arr, ne, normalization))
+        dfs.append(normalize(compute_metrics(prediction[ns], gt[ns], tau_arr, ontologies[ns].toi, None, n_cpu, B = B, B_pct= B_pct), ns, tau_arr, ne, normalization))
 
         if ontologies[ns].ia is not None:
             ne = np.full(len(tau_arr), gt[ns].matrix[:, ontologies[ns].toi_ia].shape[0])
-            dfs_w.append(normalize(compute_metrics(prediction[ns], gt[ns], tau_arr, ontologies[ns].toi_ia, ontologies[ns].ia, n_cpu), ns, tau_arr, ne, normalization))
+            dfs_w.append(normalize(compute_metrics(prediction[ns], gt[ns], tau_arr, ontologies[ns].toi_ia, ontologies[ns].ia, n_cpu, B = B, B_pct= B_pct), ns, tau_arr, ne, normalization))
 
     dfs = pd.concat(dfs)
 
@@ -151,7 +229,7 @@ def evaluate_prediction(prediction, gt, ontologies, tau_arr, normalization='cafa
     return dfs
 
 
-def cafa_eval(obo_file, pred_dir, gt_file, ia=None, no_orphans=False, norm='cafa', prop='max', max_terms=None, th_step=0.01, n_cpu=1):
+def cafa_eval(obo_file, pred_dir, gt_file, ia=None, no_orphans=False, norm='cafa', prop='max', max_terms=None, th_step=0.01, n_cpu=1, B = 0, B_pct = 50):
 
     # Tau array, used to compute metrics at different score thresholds
     tau_arr = np.arange(th_step, 1, th_step)
@@ -177,7 +255,7 @@ def cafa_eval(obo_file, pred_dir, gt_file, ia=None, no_orphans=False, norm='cafa
         if not prediction:
             logging.warning("Prediction: {}, not evaluated".format(file_name))
         else:
-            df_pred = evaluate_prediction(prediction, gt, ontologies, tau_arr, normalization=norm, n_cpu=n_cpu)
+            df_pred = evaluate_prediction(prediction, gt, ontologies, tau_arr, normalization=norm, n_cpu=n_cpu, B = B, B_pct= B_pct)
             df_pred['filename'] = file_name.replace(pred_folder, '').replace('/', '_')
             dfs.append(df_pred)
             logging.info("Prediction: {}, evaluated".format(file_name))
