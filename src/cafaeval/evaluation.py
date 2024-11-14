@@ -97,13 +97,13 @@ def get_confusion_matrix(tau_arr, g, pred, toi, ic_arr=None, B_ind = None):
         CM['FP'].append(FP)
         CM['FN'].append(FN)
 
-    metrics = get_metrics_df(CM)
-    return metrics
-    #if B_ind:
-    #    metrics_B = bootstrap(CM, B_ind)
-    #return CM
+    metrics = get_metrics(CM)
+    metrics_B = []
+    if B_ind:
+        metrics_B = bootstrap(CM, B_ind)
+    return metrics, metrics_B
 
-def get_metrics_df(CM):
+def get_metrics(CM):
     metrics = np.zeros((len(CM['tau']), 6), dtype='float')
     n_gt = CM['g'].sum(axis=1)
     for i, tau in enumerate(CM['tau']):
@@ -126,13 +126,19 @@ def get_metrics_df(CM):
     return metrics
 
 def bootstrap(CM, B_ind):
-    for i in range(len(B_ind)):
-        b_ind = B_ind[i]
-        TP_b = CM['TP'][b_ind]
-        FP_b = CM['FP'][b_ind]
-        FN_b = CM['FN'][b_ind]
+    metrics_B = []
+    for b in range(len(B_ind)):
+        b_ind = B_ind[b]
+        CM_b = {'tau': [], 'p': [], 'g': CM['g'][b_ind], 'TP': [], 'FP': [], 'FN': []} # Confusion matrix at each b index
+        for i, tau in enumerate(CM['tau']):
+            CM_b['tau'].append(tau)
+            CM_b['TP'].append(CM['TP'][i][b_ind])
+            CM_b['FP'].append(CM['FP'][i][b_ind])
+            CM_b['FN'].append(CM['FN'][i][b_ind])
+            CM_b['p'].append(CM['p'][i][b_ind])
+        metrics_B.append(get_metrics(CM_b)) #Collect metrics_df for each b
 
-
+    return metrics_B
 
 
 def compute_metrics(pred, gt, tau_arr, toi, ic_arr=None, n_cpu=0, B = 0, B_pct = 0):
@@ -153,23 +159,32 @@ def compute_metrics(pred, gt, tau_arr, toi, ic_arr=None, n_cpu=0, B = 0, B_pct =
     B_ind = []
     N = len(gt.ids) # Number of proteins
     if B and B_pct>0:
-        nB = round((B_pct / 100) * N) #Number of points to be included in each bootstrap round
+        ne_B = round((B_pct / 100) * N) #Number of proteins to be included in each bootstrap round
         for b in range(B):
-            B_ind.append(random.choices(range(0, N), k=nB))
+            B_ind.append(random.choices(range(0, N), k=ne_B))
 
     # Simple metrics
     if ic_arr is None:
         n_gt = g.sum(axis=1)
-        arg_lists = [[tau_arr, g, pred, toi, ic_arr = None, B_ind] for tau_arr in np.array_split(tau_arr, n_cpu)]
+        arg_lists = [[tau_arr, g, pred, toi, None, B_ind] for tau_arr in np.array_split(tau_arr, n_cpu)]
     # Weighted metrics
     else:
         n_gt = (g * ic_arr[toi]).sum(axis=1)
         arg_lists = [[tau_arr, g, pred, toi, ic_arr, B_ind] for tau_arr in np.array_split(tau_arr, n_cpu)]
     with mp.Pool(processes=n_cpu) as pool:
-        metrics = np.concatenate(pool.starmap(get_confusion_matrix, arg_lists), axis=0)
+        results = pool.starmap(get_confusion_matrix, arg_lists)
+        metrics = [results[i][0] for i in range(len(results))]
+        metrics_df = pd.DataFrame(np.concatenate(metrics), columns = columns)
+        metrics_B_dfs = []
+        if results[0][1]: #If metrics from the bootstrapping were calculated
+            for b in range(len(results[0][1])):
+                metrics_b = [results[i][1][b] for i in range(len(results))]
+                metrics_b_df = pd.DataFrame(np.concatenate(metrics_b), columns = columns)
+                metrics_B_dfs.append(metrics_b_df)
+        #np.concatenate(pool.starmap(get_confusion_matrix, arg_lists), axis=0)
         #metrics = np.concatenate(pool.starmap(compute_confusion_matrix, arg_lists), axis=0)
 
-    return pd.DataFrame(metrics, columns=columns)
+    return metrics_df, metrics_B_dfs, ne_B
 
 
 def normalize(metrics, ns, tau_arr, ne, normalization):
@@ -213,7 +228,16 @@ def evaluate_prediction(prediction, gt, ontologies, tau_arr, normalization='cafa
     dfs_w = []
     for ns in prediction:
         ne = np.full(len(tau_arr), gt[ns].matrix[:, ontologies[ns].toi].shape[0])
-        dfs.append(normalize(compute_metrics(prediction[ns], gt[ns], tau_arr, ontologies[ns].toi, None, n_cpu, B = B, B_pct= B_pct), ns, tau_arr, ne, normalization))
+        metrics_df, metrics_B_dfs, ne_B = compute_metrics(prediction[ns], gt[ns], tau_arr, ontologies[ns].toi, None, n_cpu, B = B, B_pct= B_pct)
+        dfs.append(normalize(metrics_df, ns, tau_arr, ne, normalization))
+        if metrics_B_dfs:
+            B_values = []
+            for b_df in metrics_B_dfs:
+                b_df = normalize(b_df, ns, tau_arr, ne_B, normalization)
+                B_values.append([b_df['f'].max(), b_df['f_micro'].max(), b_df['s'].min()])
+            # Pass this to another function to calculate the confidence intervals
+
+        #dfs.append(normalize(compute_metrics(prediction[ns], gt[ns], tau_arr, ontologies[ns].toi, None, n_cpu, B = B, B_pct= B_pct), ns, tau_arr, ne, normalization))
 
         if ontologies[ns].ia is not None:
             ne = np.full(len(tau_arr), gt[ns].matrix[:, ontologies[ns].toi_ia].shape[0])
