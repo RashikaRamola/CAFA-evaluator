@@ -24,7 +24,6 @@ def compute_s(ru, mi):
     return np.sqrt(ru**2 + mi**2)
     # return np.where(np.isnan(ru), mi, np.sqrt(ru + np.nan_to_num(mi)))
 
-
 def compute_confusion_matrix(tau_arr, g, pred, toi, n_gt, ic_arr=None):
     """
     Perform the evaluation at the matrix level for all tau thresholds
@@ -137,7 +136,6 @@ def bootstrap(CM, B_ind):
             CM_b['FN'].append(CM['FN'][i][b_ind])
             CM_b['p'].append(CM['p'][i][b_ind])
         metrics_B.append(get_metrics(CM_b)) #Collect metrics_df for each b
-
     return metrics_B
 
 
@@ -159,9 +157,9 @@ def compute_metrics(pred, gt, tau_arr, toi, ic_arr=None, n_cpu=0, B = 0, B_pct =
     B_ind = []
     N = len(gt.ids) # Number of proteins
     if B and B_pct>0:
-        ne_B = round((B_pct / 100) * N) #Number of proteins to be included in each bootstrap round
+        nB = round((B_pct / 100) * N) #Number of proteins to be included in each bootstrap round
         for b in range(B):
-            B_ind.append(random.choices(range(0, N), k=ne_B))
+            B_ind.append(random.choices(range(0, N), k=nB))
 
     # Simple metrics
     if ic_arr is None:
@@ -181,10 +179,8 @@ def compute_metrics(pred, gt, tau_arr, toi, ic_arr=None, n_cpu=0, B = 0, B_pct =
                 metrics_b = [results[i][1][b] for i in range(len(results))]
                 metrics_b_df = pd.DataFrame(np.concatenate(metrics_b), columns = columns)
                 metrics_B_dfs.append(metrics_b_df)
-        #np.concatenate(pool.starmap(get_confusion_matrix, arg_lists), axis=0)
-        #metrics = np.concatenate(pool.starmap(compute_confusion_matrix, arg_lists), axis=0)
 
-    return metrics_df, metrics_B_dfs, ne_B
+    return metrics_df, metrics_B_dfs, nB
 
 
 def normalize(metrics, ns, tau_arr, ne, normalization):
@@ -221,36 +217,53 @@ def normalize(metrics, ns, tau_arr, ne, normalization):
 
     return metrics
 
+def process_bootstrap_results(metrics_B_dfs, nB, ns, tau_arr, normalization):
+    ne_B = np.full(len(tau_arr), nB)
+    B_values = []
+    for b_df in metrics_B_dfs:
+        b_df_n = normalize(b_df, ns, tau_arr, ne_B, normalization)
+        B_values.append([b_df_n['f'].max(), b_df_n['f_micro'].max(), b_df_n['s'].min()])
+    B_values_df = pd.DataFrame(B_values, columns=["f_max", "f_micro_max", "s_min"])
+    B_values_df["B"] = len(metrics_B_dfs)
+    B_values_df["ns"] = ns
+    return B_values_df
+
+
 
 def evaluate_prediction(prediction, gt, ontologies, tau_arr, normalization='cafa', n_cpu=0, B = 0, B_pct = 0):
 
     dfs = []
     dfs_w = []
+    metrics_B = []
+    metrics_B_w = []
     for ns in prediction:
         ne = np.full(len(tau_arr), gt[ns].matrix[:, ontologies[ns].toi].shape[0])
-        metrics_df, metrics_B_dfs, ne_B = compute_metrics(prediction[ns], gt[ns], tau_arr, ontologies[ns].toi, None, n_cpu, B = B, B_pct= B_pct)
+        metrics_df, metrics_B_dfs, nB = compute_metrics(prediction[ns], gt[ns], tau_arr, ontologies[ns].toi, None, n_cpu, B = B, B_pct= B_pct)
         dfs.append(normalize(metrics_df, ns, tau_arr, ne, normalization))
         if metrics_B_dfs:
-            B_values = []
-            for b_df in metrics_B_dfs:
-                b_df = normalize(b_df, ns, tau_arr, ne_B, normalization)
-                B_values.append([b_df['f'].max(), b_df['f_micro'].max(), b_df['s'].min()])
-            # Pass this to another function to calculate the confidence intervals
-
-        #dfs.append(normalize(compute_metrics(prediction[ns], gt[ns], tau_arr, ontologies[ns].toi, None, n_cpu, B = B, B_pct= B_pct), ns, tau_arr, ne, normalization))
+            metrics_B.append(process_bootstrap_results(metrics_B_dfs, nB, ns, tau_arr, normalization))
 
         if ontologies[ns].ia is not None:
             ne = np.full(len(tau_arr), gt[ns].matrix[:, ontologies[ns].toi_ia].shape[0])
-            dfs_w.append(normalize(compute_metrics(prediction[ns], gt[ns], tau_arr, ontologies[ns].toi_ia, ontologies[ns].ia, n_cpu, B = B, B_pct= B_pct), ns, tau_arr, ne, normalization))
+            metrics_df_w, metrics_B_dfs_w, nB_w = compute_metrics(prediction[ns], gt[ns], tau_arr, ontologies[ns].toi_ia, ontologies[ns].ia, n_cpu, B = B, B_pct= B_pct)
+            dfs_w.append(normalize(metrics_df_w, ns, tau_arr, ne, normalization))
+            if metrics_B_dfs_w:
+                metrics_B_w.append(process_bootstrap_results(metrics_B_dfs_w, nB_w, ns, tau_arr, normalization))
 
     dfs = pd.concat(dfs)
+    if metrics_B:
+        metrics_B = pd.concat(metrics_B)
 
     # Merge weighted and unweighted dataframes
     if dfs_w:
         dfs_w = pd.concat(dfs_w)
         dfs = pd.merge(dfs, dfs_w, on=['ns', 'tau'], suffixes=('', '_w'))
+        if metrics_B_w:
+            metrics_B_w = pd.concat(metrics_B_w)
+            metrics_B_w = metrics_B_w.add_suffix('_w')
+            metrics_B = pd.concat([metrics_B, metrics_B_w], axis=1)
 
-    return dfs
+    return dfs, metrics_B
 
 
 def cafa_eval(obo_file, pred_dir, gt_file, ia=None, no_orphans=False, norm='cafa', prop='max', max_terms=None, th_step=0.01, n_cpu=1, B = 0, B_pct = 50):
@@ -274,18 +287,24 @@ def cafa_eval(obo_file, pred_dir, gt_file, ia=None, no_orphans=False, norm='cafa
 
     # Parse prediction files and perform evaluation
     dfs = []
+    metrics_B_dfs = []
+    metrics_B = None
     for file_name in pred_files:
         prediction = pred_parser(file_name, ontologies, gt, prop, max_terms)
         if not prediction:
             logging.warning("Prediction: {}, not evaluated".format(file_name))
         else:
-            df_pred = evaluate_prediction(prediction, gt, ontologies, tau_arr, normalization=norm, n_cpu=n_cpu, B = B, B_pct= B_pct)
+            df_pred, metrics_B = evaluate_prediction(prediction, gt, ontologies, tau_arr, normalization=norm, n_cpu=n_cpu, B = B, B_pct= B_pct)
             df_pred['filename'] = file_name.replace(pred_folder, '').replace('/', '_')
+            if isinstance(metrics_B, pd.DataFrame):
+                metrics_B['filename'] = file_name.replace(pred_folder, '').replace('/', '_')
+                metrics_B_dfs.append(metrics_B)
             dfs.append(df_pred)
             logging.info("Prediction: {}, evaluated".format(file_name))
 
     # Concatenate all dataframes and save them
     df = None
+    B_df = None
     dfs_best = {}
     if dfs:
         df = pd.concat(dfs)
@@ -304,13 +323,16 @@ def cafa_eval(obo_file, pred_dir, gt_file, ia=None, no_orphans=False, norm='cafa
                 else:
                     df_best['cov_max'] = df.reset_index('tau').loc[[ele[:-1] for ele in index_best]].groupby(level=['filename', 'ns'])['cov_w'].max()
                 dfs_best[metric] = df_best
+
+        if metrics_B_dfs:
+            B_df = pd.concat(metrics_B_dfs)
     else:
         logging.info("No predictions evaluated")
 
-    return df, dfs_best
+    return df, dfs_best, B_df
 
 
-def write_results(df, dfs_best, out_dir='results', th_step=0.01):
+def write_results(df, dfs_best, metrics_B_df, out_dir='results', th_step=0.01):
 
     # Create output folder here in order to store the log file
     out_folder = os.path.normpath(out_dir) + "/"
@@ -321,6 +343,9 @@ def write_results(df, dfs_best, out_dir='results', th_step=0.01):
     decimals = int(np.ceil(-np.log10(th_step))) + 1
 
     df.to_csv('{}/evaluation_all.tsv'.format(out_folder), float_format="%.{}f".format(decimals), sep="\t")
+
+    if isinstance(metrics_B_df, pd.DataFrame):
+        metrics_B_df.to_csv('{}/bootstrap.tsv'.format(out_folder), float_format="%.{}f".format(decimals), sep="\t")
 
     for metric in dfs_best:
         dfs_best[metric].to_csv('{}/evaluation_best_{}.tsv'.format(out_folder, metric), float_format="%.{}f".format(decimals), sep="\t")
