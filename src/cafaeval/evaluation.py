@@ -24,48 +24,6 @@ def compute_s(ru, mi):
     return np.sqrt(ru**2 + mi**2)
     # return np.where(np.isnan(ru), mi, np.sqrt(ru + np.nan_to_num(mi)))
 
-def compute_confusion_matrix(tau_arr, g, pred, toi, n_gt, ic_arr=None):
-    """
-    Perform the evaluation at the matrix level for all tau thresholds
-    The calculation is
-    """
-    # n, tp, fp, fn, pr, rc (fp = misinformation, fn = remaining uncertainty)
-    metrics = np.zeros((len(tau_arr), 6), dtype='float')
-
-    for i, tau in enumerate(tau_arr):
-
-        # Filter predictions based on tau threshold
-        p = solidify_prediction(pred.matrix[:, toi], tau)
-
-        # Terms subsets
-        intersection = np.logical_and(p, g)  # TP
-        mis = np.logical_and(p, np.logical_not(g))  # FP, predicted but not in the ground truth
-        remaining = np.logical_and(np.logical_not(p), g)  # FN, not predicted but in the ground truth
-
-        # Weighted evaluation
-        if ic_arr is not None:
-            p = p * ic_arr[toi]
-            intersection = intersection * ic_arr[toi]  # TP
-            mis = mis * ic_arr[toi]  # FP, predicted but not in the ground truth
-            remaining = remaining * ic_arr[toi]  # FN, not predicted but in the ground truth
-
-        n_pred = p.sum(axis=1)  # TP + FP
-        n_intersection = intersection.sum(axis=1)  # TP
-
-        # Number of proteins with at least one term predicted with score >= tau
-        metrics[i, 0] = (p.sum(axis=1) > 0).sum()
-
-        # Sum of confusion matrices
-        metrics[i, 1] = n_intersection.sum()  # TP
-        metrics[i, 2] = mis.sum(axis=1).sum()  # FP
-        metrics[i, 3] = remaining.sum(axis=1).sum()  # FN
-
-        # Macro-averaging
-        metrics[i, 4] = np.divide(n_intersection, n_pred, out=np.zeros_like(n_intersection, dtype='float'), where=n_pred > 0).sum()  # Precision
-        metrics[i, 5] = np.divide(n_intersection, n_gt, out=np.zeros_like(n_gt, dtype='float'), where=n_gt > 0).sum()  # Recall
-
-    return metrics
-
 def get_confusion_matrix(tau_arr, g, pred, toi, ic_arr=None, B_ind = None):
     """
     Perform the evaluation at the matrix level for all tau thresholds
@@ -156,6 +114,7 @@ def compute_metrics(pred, gt, tau_arr, toi, ic_arr=None, n_cpu=0, B = 0, B_pct =
     # Generate B sets of indices
     B_ind = []
     N = len(gt.ids) # Number of proteins
+    nB = 0
     if B and B_pct>0:
         nB = round((B_pct / 100) * N) #Number of proteins to be included in each bootstrap round
         for b in range(B):
