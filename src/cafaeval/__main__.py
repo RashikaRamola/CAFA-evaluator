@@ -2,11 +2,6 @@ import argparse
 from evaluation import cafa_eval, write_results
 import logging
 
-def validate_percentage(value):
-    ivalue = int(value)
-    if ivalue < 0 or ivalue > 100:
-        raise argparse.ArgumentTypeError(f"{value} is an invalid percentage value. It must be between 0 and 100.")
-    return ivalue
 
 def command_line():
 
@@ -32,6 +27,13 @@ def command_line():
     parser.add_argument('-prop', choices=['max', 'fill'], default='max',
                         help='Ancestor propagation strategy. max - Propagate the max score of the traversed subgraph '
                              'iteratively. fill - Propagate with max until a different score is found')
+    parser.add_argument('-known', default=None,
+                        help='Known annotations to exclude from evaluation. Same format at ground truth file')
+    parser.add_argument('-toi', default=None,
+                        help='File with GO IDs for terms of interest on which to evaluate. '
+                             'Usually, this is to exclude terms that were removed from GO '
+                             'since evaluation obo file was created. If None (default), all terms will be'
+                             'included in evaluation, possibly excluding roots if -no_orphans is passed')
     parser.add_argument('-th_step', type=float, default=0.01,
                         help='Threshold step size in the range [0, 1). A smaller step, means more calculation')
     parser.add_argument('-max_terms', type=int, default=None,
@@ -41,10 +43,6 @@ def command_line():
                              'Do not use multithread if you are short in memory')
     parser.add_argument('-log_level', type=str, choices=['debug', 'info', 'warning', 'error', 'critical'],
                         default='info', help='Log level')
-    parser.add_argument('-B', type=int, default=0,
-                        help='Number of bootstrap iterations')
-    parser.add_argument('-B_pct', type=validate_percentage, default=0,
-                        help='Percentage of points to include in bootstrap iterations')
 
     args = parser.parse_args()
 
@@ -57,12 +55,13 @@ def command_line():
     root_handler.setFormatter(log_formatter)
 
     # Run the evaluation
-    df, dfs_best, metrics_B_df = cafa_eval(args.obo_file, args.pred_dir, args.gt_file,
+    df, dfs_best = cafa_eval(args.obo_file, args.pred_dir, args.gt_file,
                              ia=args.ia, no_orphans=args.no_orphans, norm=args.norm, prop=args.prop,
-                             max_terms=args.max_terms, th_step=args.th_step, n_cpu=args.threads, B = args.B, B_pct= args.B_pct)
+                             exclude=args.known, toi_file=args.toi,
+                             max_terms=args.max_terms, th_step=args.th_step, n_cpu=args.threads)
 
     # Write the results
-    write_results(df, dfs_best, metrics_B_df, out_dir=args.out_dir, th_step=args.th_step)
+    write_results(df, dfs_best, out_dir=args.out_dir, th_step=args.th_step)
 
 
 if __name__ == "__main__":
