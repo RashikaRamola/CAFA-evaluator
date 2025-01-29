@@ -2,6 +2,11 @@ import argparse
 from evaluation import cafa_eval, write_results
 import logging
 
+def validate_percentage(value):
+    ivalue = int(value)
+    if ivalue < 0 or ivalue > 100:
+        raise argparse.ArgumentTypeError(f"{value} is an invalid percentage value. It must be between 0 and 100.")
+    return ivalue
 
 def command_line():
 

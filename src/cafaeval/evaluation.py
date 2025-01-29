@@ -2,6 +2,7 @@ import os
 import numpy as np
 import pandas as pd
 import multiprocessing as mp
+import random
 from parser import obo_parser, gt_parser, pred_parser, gt_exclude_parser, update_toi
 import logging
 logging.getLogger(__name__).addHandler(logging.NullHandler())
@@ -23,7 +24,8 @@ def compute_s(ru, mi):
     return np.sqrt(ru**2 + mi**2)
     # return np.where(np.isnan(ru), mi, np.sqrt(ru + np.nan_to_num(mi)))
 
-def get_confusion_matrix(tau_arr, g, pred, toi, ic_arr=None, B_ind = None):
+
+def get_confusion_matrix(tau_arr, g, pred, toi, n_gt, ic_arr=None, B_ind = None):
     """
     Perform the evaluation at the matrix level for all tau thresholds
     """
@@ -53,16 +55,16 @@ def get_confusion_matrix(tau_arr, g, pred, toi, ic_arr=None, B_ind = None):
         CM['FP'].append(FP)
         CM['FN'].append(FN)
 
-    metrics = get_metrics(CM)
+    metrics = get_metrics(CM, n_gt)
     metrics_B = []
     if B_ind:
         metrics_B = bootstrap(CM, B_ind)
     return metrics, metrics_B
-def get_confusion_matrix_exclude(tau_arr, g_perprotein, pred, toi_perprotein, ic_arr=None, B_ind = None):
+def get_confusion_matrix_exclude(tau_arr, g_perprotein, pred, toi_perprotein, n_gt, ic_arr=None, B_ind = None):
     """
     Perform the evaluation at the matrix level for all tau thresholds
     """
-    CM = {'tau': [], 'p': [], 'g': g, 'TP': [], 'FP': [], 'FN': []}
+    CM = {'tau': [], 'p': [], 'g': g_perprotein, 'TP': [], 'FP': [], 'FN': []}
 
     for i, tau in enumerate(tau_arr):
 
@@ -87,13 +89,13 @@ def get_confusion_matrix_exclude(tau_arr, g_perprotein, pred, toi_perprotein, ic
         CM['FP'].append(FP)
         CM['FN'].append(FN)
 
-        metrics = get_metrics(CM)
-        metrics_B = []
-        if B_ind:
-            metrics_B = bootstrap(CM, B_ind)
+    metrics = get_metrics(CM, n_gt)
+    metrics_B = []
+    if B_ind:
+        metrics_B = bootstrap(CM, B_ind)
     return metrics, metrics_B
 
-def get_metrics(CM):
+def get_metrics(CM, n_gt):
     metrics = np.zeros((len(CM['tau']), 6), dtype='float')
     n_gt = CM['g'].sum(axis=1)
     for i, tau in enumerate(CM['tau']):
@@ -258,7 +260,7 @@ def evaluate_prediction(prediction, gt, ontologies, tau_arr, gt_exclude=None, no
             num_pred_prots = sum([gt[ns].matrix[p, toi_perprotein[p]].sum()>0 for p in range(num_proteins)])
 
         ne = np.full(len(tau_arr), num_pred_prots)
-        metrics_df, metrics_B_dfs, nB = compute_metrics(prediction[ns], gt[ns], tau_arr, ontologies[ns].toi, None,
+        metrics_df, metrics_B_dfs, nB = compute_metrics(prediction[ns], gt[ns], tau_arr, ontologies[ns].toi, exclude,None,
                                                         n_cpu, B=B, B_pct=B_pct)
         dfs.append(normalize(metrics_df, ns, tau_arr, ne, normalization))
         if metrics_B_dfs:
@@ -269,7 +271,7 @@ def evaluate_prediction(prediction, gt, ontologies, tau_arr, gt_exclude=None, no
             exclude = None if gt_exclude is None else gt_exclude[ns]
             ne = np.full(len(tau_arr), gt[ns].matrix[:, ontologies[ns].toi_ia].shape[0])
             metrics_df_w, metrics_B_dfs_w, nB_w = compute_metrics(prediction[ns], gt[ns], tau_arr,
-                                                                  ontologies[ns].toi_ia, ontologies[ns].ia, n_cpu, B=B,
+                                                                  ontologies[ns].toi_ia, exclude, ontologies[ns].ia, n_cpu, B=B,
                                                                   B_pct=B_pct)
             dfs_w.append(normalize(metrics_df_w, ns, tau_arr, ne, normalization))
             if metrics_B_dfs_w:
